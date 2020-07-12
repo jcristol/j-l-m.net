@@ -3,15 +3,42 @@ const fs = require("fs");
 const path = require("path");
 const glob = require("glob");
 const rimraf = require("rimraf");
+const sass = require("sass");
+const jsdom = require("jsdom");
 
 const rootDir = process.cwd();
+
+function modifyAllSassLinks(document) {
+  const stylesheets = document.querySelectorAll("link[rel=stylesheet]");
+  stylesheets.forEach(
+    (node) => (node.href = node.href.replace(/\.scss$/, ".css"))
+  );
+}
+
+function modifyAllJsImports(document) {
+  const scripts = document.querySelectorAll("script");
+  scripts.forEach((e) => {
+    if (!/^http.*/g.test(e.src)) {
+      e.src = e.src.replace("/js", "./js");
+    }
+  });
+}
+
+function modifyAllAnchors(document) {
+  const anchors = document.querySelectorAll("a");
+  anchors.forEach((e) => {
+    if (!/^http.*/g.test(e.src)) {
+      e.href = e.href.substr(1);
+      e.href = e.href + "/index.html";
+    }
+  });
+}
 
 function replaceAll(str, patterns) {
   return patterns.reduce((prev, cur) => {
     const { from, to } = cur;
     const regex = new RegExp(from, "g");
     const res = prev.replace(regex, to);
-    console.log(res);
     return res;
   }, str);
 }
@@ -46,24 +73,33 @@ function buildHTML() {
     fs.writeFileSync(`${rootDir}/.out/${htmlFile}`, stdout);
   });
 
-  // find and replace references to images css and js
-  // const htmlFiles = glob.sync(".out/**/*.html");
-  // htmlFiles.slice(14, 15).forEach((file) => {
-  //   const str = fs.readFileSync(file).toString();
-  //   const modified = replaceAll(str, [
-  //     { from: `"css`, to: `"./css` },
-  //     { from: `"js`, to: `"./js` },
-  //     { from: `"images`, to: `"./images` },
-  //     { from: `"/css`, to: `"./css` },
-  //     { from: `"/js`, to: `"./js` },
-  //     { from: `"/images`, to: `"./images` },
-  //     { from: `/images`, to: `"./images` },
-  //   ]);
-  //   fs.writeFileSync(file, Buffer.from(modified));
-  // });
+  const htmlFiles = glob.sync(".out/**/*.html");
+  htmlFiles.forEach((file) => {
+    const str = fs.readFileSync(file).toString();
+    const {
+      window: { document },
+    } = new jsdom.JSDOM(str);
+    modifyAllSassLinks(document);
+    modifyAllJsImports(document);
+    modifyAllAnchors(document);
+    fs.writeFileSync(file, document.documentElement.innerHTML);
+  });
+}
+
+function compileCss() {
+  createDir(`${rootDir}/.out/css`);
+  const sassFiles = glob.sync("css/*.scss", { ignore: ".sass-cache" });
+  sassFiles.forEach((file) => {
+    const dir = path.dirname(file);
+    const fileName = file.replace(dir, "");
+    const { css } = sass.renderSync({ file });
+    const cssFileName = fileName.replace(".scss", ".css");
+    fs.writeFileSync(`${rootDir}/.out/css/${cssFileName}`, css);
+  });
 }
 
 rimraf.sync(".out");
 createDir(".out");
 buildHTML();
+compileCss();
 copyAssets();
